@@ -1,6 +1,6 @@
 # PNG Image Viewer & MP4 Exporter
 
-A fast, multi-threaded PNG image sequence viewer for Windows with high-quality MP4 export capabilities. Designed for viewing and exporting large image sequences.
+A fast, multi-threaded PNG image sequence viewer for Windows and linux with high-quality MP4 export capabilities. Designed for viewing and exporting large image sequences.
 
 ## Features
 
