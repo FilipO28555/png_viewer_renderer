@@ -42,39 +42,34 @@ static void RenderViewToBufferHQ(
     const ViewState& view,
     const AppSettings& settings
 ) {
-    // Compute fit scale as in GetFitScale
-    double scaleX = static_cast<double>(settings.windowWidth) / srcW;
-    double scaleY = static_cast<double>(settings.windowHeight) / srcH;
-    double fitScale = std::min(scaleX, scaleY);
+    // Use the same math as the preview (RenderFrame)
+    RenderParams params = CalculateRenderParams(view, settings, srcW, srcH);
+    // params.srcX, srcY, srcW, srcH: region in source image
+    // params.dstX, dstY, dstW, dstH: region in output buffer
 
-    double currentScale = fitScale * view.zoomLevel;
-
-    // Visible region in source coordinates (for reference)
-    double visibleW = settings.windowWidth / currentScale;
-    double visibleH = settings.windowHeight / currentScale;
-
-    // Center of view in source coordinates (full-res)
-    // Interpret panX/panY as offsets in window space, scaled into source space
-    double centerX = srcW / 2.0 + view.panX * (visibleW / settings.windowWidth);
-    double centerY = srcH / 2.0 + view.panY * (visibleH / settings.windowHeight);
-
-    // For each output pixel, map back to source image
+    // For each output pixel, map to source pixel using srcRect/dstRect
     for (int y = 0; y < outH; ++y) {
         for (int x = 0; x < outW; ++x) {
-            double srcX = (x - outW / 2.0) / currentScale + centerX;
-            double srcY = (y - outH / 2.0) / currentScale + centerY;
-
-            int ix = static_cast<int>(srcX);
-            int iy = static_cast<int>(srcY);
-
-            unsigned char* dst = buffer + (static_cast<size_t>(y) * outW + x) * 3;
-
-            if (ix >= 0 && ix < srcW && iy >= 0 && iy < srcH) {
-                const unsigned char* srcPix = src + (static_cast<size_t>(iy) * srcW + ix) * 3;
-                dst[0] = srcPix[0];
-                dst[1] = srcPix[1];
-                dst[2] = srcPix[2];
+            // Only fill pixels inside the destination rectangle
+            if (x >= params.dstX && x < params.dstX + params.dstW &&
+                y >= params.dstY && y < params.dstY + params.dstH) {
+                // Map (x, y) in output to (sx, sy) in source
+                double fx = (x - params.dstX) / (double)params.dstW;
+                double fy = (y - params.dstY) / (double)params.dstH;
+                int sx = params.srcX + static_cast<int>(fx * params.srcW);
+                int sy = params.srcY + static_cast<int>(fy * params.srcH);
+                unsigned char* dst = buffer + (static_cast<size_t>(y) * outW + x) * 3;
+                if (sx >= 0 && sx < srcW && sy >= 0 && sy < srcH) {
+                    const unsigned char* srcPix = src + (static_cast<size_t>(sy) * srcW + sx) * 3;
+                    dst[0] = srcPix[0];
+                    dst[1] = srcPix[1];
+                    dst[2] = srcPix[2];
+                } else {
+                    dst[0] = dst[1] = dst[2] = 0;
+                }
             } else {
+                // Outside the destination rectangle: black
+                unsigned char* dst = buffer + (static_cast<size_t>(y) * outW + x) * 3;
                 dst[0] = dst[1] = dst[2] = 0;
             }
         }
@@ -298,7 +293,7 @@ void ParseArguments(int argc, char* argv[]) {
             i++;
         }
         else if ((strcmp(argv[i], "-t") == 0 || strcmp(argv[i], "--threads") == 0) && i + 1 < argc) {
-            g_settings.numThreads = std::clamp(atoi(argv[i + 1]), 1, 64);
+            g_settings.numThreads = std::clamp(atoi(argv[i + 1]), 1, 128);
             i++;
         }
         else if ((strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "--folder") == 0) && i + 1 < argc) {
@@ -589,7 +584,7 @@ void ExportToMP4_MT() {
     char cmd[1024];
     std::snprintf(cmd, sizeof(cmd),
         "ffmpeg -y -f rawvideo -pixel_format rgb24 -video_size %dx%d -framerate %d -i - "
-        "-c:v libx264 -pix_fmt yuv420p -crf 18 \"%s\"",
+        "-c:v libx264 -pix_fmt yuv444p -crf 18 \"%s\"",
         winW, winH, fps, filename.c_str());
 
     FILE* ffmpeg = popen(cmd, "w");
@@ -623,9 +618,17 @@ void ExportToMP4_MT() {
             int w, h, channels;
             unsigned char* data = stbi_load(g_images.allFilePaths[idx].c_str(), &w, &h, &channels, 3);
             if (data) {
+                // Scale pan/zoom from preview (window) to full-res coordinates for export
+                ViewState exportView = capturedView;
+                double scaleX = (double)w / (double)winW;
+                double scaleY = (double)h / (double)winH;
+                exportView.panX = capturedView.panX * scaleX;
+                exportView.panY = capturedView.panY * scaleY;
+                exportView.zoomLevel = capturedView.zoomLevel; // zoomLevel is a ratio, so keep as-is
+
                 RenderViewToBufferHQ(buffer, winW, winH,
                                      data, w, h,
-                                     capturedView, capturedSettings);
+                                     exportView, capturedSettings);
                 stbi_image_free(data);
             }
 

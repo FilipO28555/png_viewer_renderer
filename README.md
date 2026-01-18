@@ -58,7 +58,7 @@ See `linux/README.md` for more installation options if SDL2 module is not availa
 | **End** | Last image |
 | **Space** | Play/Pause animation |
 | **J** | Reverse playback direction |
-| **S** | Export current view to MP4 (Windows) |
+| **S** | Export current view to MP4 |
 | **Mouse Wheel** | Zoom in/out |
 | **Left Mouse Drag** | Pan |
 | **R** | Reset zoom/pan |
