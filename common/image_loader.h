@@ -8,6 +8,10 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <atomic>
+
+// Global interrupt flag for Ctrl+C handling
+extern std::atomic<bool> g_interrupted;
 
 // Extract the numeric index from filename like "e_png_yx_0.5_000100.png"
 // Matches pattern *_<number>.png

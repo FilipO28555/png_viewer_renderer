@@ -19,6 +19,13 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <chrono>
+#include <csignal>
+
+// Signal handler for Ctrl+C
+void signalHandler(int signum) {
+    std::cout << "\n\nInterrupt received (Ctrl+C), stopping..." << std::endl;
+    g_interrupted.store(true);
+}
 
 // Global state
 AppSettings g_settings;
@@ -264,6 +271,10 @@ void ParseArguments(int argc, char* argv[]) {
 }
 
 int main(int argc, char* argv[]) {
+    // Install signal handler for Ctrl+C
+    signal(SIGINT, signalHandler);
+    signal(SIGTERM, signalHandler);
+    
     // Parse command line
     ParseArguments(argc, argv);
     
@@ -273,6 +284,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Shrink factor: " << (g_settings.shrinkFactor == 0 ? "auto" : std::to_string(g_settings.shrinkFactor)) << std::endl;
     std::cout << "Load every " << g_settings.nthFrame << "-th image" << std::endl;
     std::cout << "Threads: " << g_settings.numThreads << std::endl;
+    std::cout << "(Press Ctrl+C to interrupt loading)" << std::endl;
     
     // Check for folder argument
     if (g_settings.initialFolder.empty()) {
@@ -339,7 +351,7 @@ int main(int argc, char* argv[]) {
     bool running = true;
     SDL_Event event;
     
-    while (running) {
+    while (running && !g_interrupted.load()) {
         // Process events
         while (SDL_PollEvent(&event)) {
             switch (event.type) {

@@ -9,6 +9,9 @@
 #include <algorithm>
 #include <cctype>
 
+// Global interrupt flag - can be set by signal handler
+std::atomic<bool> g_interrupted(false);
+
 int ExtractIndex(const std::string& filename) {
     size_t dotPos = filename.rfind('.');
     if (dotPos == std::string::npos) return -1;
@@ -136,6 +139,11 @@ bool LoadImagesCommon(
     // Worker function
     auto loadWorker = [&](size_t startIdx, size_t endIdx) {
         for (size_t i = startIdx; i < endIdx; i++) {
+            // Check for interrupt
+            if (g_interrupted.load()) {
+                return;
+            }
+            
             int w, h;
             unsigned char* data = LoadAndShrinkImage(files[i], shrinkFactor, w, h, rgbOutput, flipVertical);
             
@@ -191,6 +199,13 @@ bool LoadImagesCommon(
         thread.join();
     }
     std::cout << std::endl;
+    
+    // Check if interrupted
+    if (g_interrupted.load()) {
+        std::cout << "\nLoading interrupted by user (Ctrl+C)" << std::endl;
+        collection.cleanup();
+        return false;
+    }
     
     // Remove failed loads
     collection.frames.erase(
