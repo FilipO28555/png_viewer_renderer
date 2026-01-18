@@ -42,7 +42,7 @@ See `linux/README.md` for more installation options if SDL2 module is not availa
 | Option | Description | Default |
 |--------|-------------|---------|
 | `-f, --folder <path>` | Folder containing images (Linux only, required) | - |
-| `-s, --shrink <factor>` | Shrink factor for preview images | Auto |
+| `-s, --shrink <factor>` | Shrink factor for preview images (integer)| Auto |
 | `-n, --nth <n>` | Load every n-th image for preview | 1 |
 | `-x <width>` | Window width in pixels | 1000 |
 | `-y <height>` | Window height in pixels | 1000 |
