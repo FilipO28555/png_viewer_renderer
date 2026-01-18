@@ -29,6 +29,48 @@ make deps
 make
 ```
 
+### HPC/Cluster Systems (no sudo access)
+
+On shared systems, SDL2 may be available via the module system:
+
+```bash
+# Check available modules
+module avail sdl
+module avail SDL
+
+# Load SDL2 if available (name varies by system)
+module load sdl2
+# or
+module load SDL2
+
+# Then build
+make deps
+make
+```
+
+If SDL2 is not available as a module, you can install it locally:
+
+```bash
+# Install SDL2 to your home directory
+cd ~
+wget https://github.com/libsdl-org/SDL/releases/download/release-2.30.0/SDL2-2.30.0.tar.gz
+tar -xzf SDL2-2.30.0.tar.gz
+cd SDL2-2.30.0
+./configure --prefix=$HOME/.local
+make -j$(nproc)
+make install
+
+# Add to your environment (add to ~/.bashrc for persistence)
+export PATH="$HOME/.local/bin:$PATH"
+export LD_LIBRARY_PATH="$HOME/.local/lib:$LD_LIBRARY_PATH"
+export PKG_CONFIG_PATH="$HOME/.local/lib/pkgconfig:$PKG_CONFIG_PATH"
+
+# Now build the viewer
+cd /path/to/png_viewer_renderer/linux
+make deps
+make
+```
+
 ### Manual Installation
 
 #### 1. Install SDL2
@@ -42,6 +84,11 @@ sudo dnf install SDL2-devel
 
 # Arch Linux
 sudo pacman -S sdl2
+
+# CentOS/RHEL
+sudo yum install SDL2-devel
+# or with EPEL
+sudo dnf install SDL2-devel
 ```
 
 #### 2. Get stb_image.h

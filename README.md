@@ -48,18 +48,29 @@ display_image.exe
 
 ### Linux
 
+#### Desktop (with sudo access)
+
 ```bash
-cd linux
-
-# Install SDL2
-sudo apt install libsdl2-dev  # Debian/Ubuntu
-
-# Build
+git clone https://github.com/FilipO28555/png_viewer_renderer.git
+cd png_viewer_renderer/linux
+sudo apt install libsdl2-dev
+make deps
 make
-
-# Run
 ./display_image -f /path/to/images
 ```
+
+#### HPC/Cluster (no sudo access)
+
+```bash
+git clone https://github.com/FilipO28555/png_viewer_renderer.git
+cd png_viewer_renderer/linux
+module load SDL2
+make deps
+make
+./display_image -f /path/to/images
+```
+
+See `linux/README.md` for more installation options if SDL2 module is not available.
 
 ## Command Line Options
 
