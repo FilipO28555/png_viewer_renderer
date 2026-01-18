@@ -12,25 +12,6 @@ A fast, multi-threaded PNG image sequence viewer for Windows and linux with high
 - **Multi-threaded export**: Parallel rendering for fast exports (Windows)
 - **Memory efficient**: Only keeps preview images in RAM; exports read originals on-the-fly
 
-## Repository Structure
-
-```
-png_viewer_renderer/
-├── common/                    # Shared platform-independent code
-│   ├── stb_image.h           # Image loading library
-│   ├── frame_types.h         # Common data structures
-│   ├── math_utils.h          # Zoom/pan calculations
-│   ├── image_loader.h        # Image loading interface
-│   └── image_loader.cpp      # Image loading implementation
-├── linux/                     # Linux-specific code
-│   ├── display_image_linux.cpp
-│   ├── Makefile
-│   └── README.md
-├── display_image.cpp          # Windows GDI implementation
-├── README.md                  # This file
-└── PORTING_GUIDE_LINUX.md    # Original porting notes
-```
-
 ## Quick Start
 
 ### Windows
@@ -39,27 +20,11 @@ png_viewer_renderer/
 # Compile with g++ (MinGW)
 g++ -o display_image.exe display_image.cpp -lgdi32 -lcomdlg32 -lole32 -O2 -std=c++11
 
-# Or with MSVC
-cl /O2 /EHsc display_image.cpp gdi32.lib comdlg32.lib ole32.lib shell32.lib
-
 # Run
 display_image.exe
 ```
 
 ### Linux
-
-#### Desktop (with sudo access)
-
-```bash
-git clone https://github.com/FilipO28555/png_viewer_renderer.git
-cd png_viewer_renderer/linux
-sudo apt install libsdl2-dev
-make deps
-make
-./display_image -f /path/to/images
-```
-
-#### HPC/Cluster (no sudo access)
 
 ```bash
 git clone https://github.com/FilipO28555/png_viewer_renderer.git
@@ -118,8 +83,10 @@ Images are automatically sorted by their numeric suffix.
 |---------|---------|-------|
 | Graphics | GDI | SDL2 |
 | Folder selection | GUI dialog | Command line `-f` |
-| MP4 export | ✅ Full support | 🔜 Planned |
+| MP4 export | ✅ Full support | ✅ Full support |
 | File dialogs | Native | Command line |
+
+On Linux the output of the encoder is the folder from where you start the program.
 
 ## Requirements
 
@@ -140,9 +107,8 @@ Images are automatically sorted by their numeric suffix.
 - Only shrunk preview images are kept in RAM
 - Auto-shrink targets ~2× window size for preview images
 
-**During export (Windows):**
+**During export:**
 - One source image loaded at a time per thread
-- Bounded queue prevents memory explosion
 
 ## License
 
