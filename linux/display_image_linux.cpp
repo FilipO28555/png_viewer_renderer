@@ -20,10 +20,69 @@
 #include <sys/stat.h>
 #include <chrono>
 #include <csignal>
+#include <cstdio>
+#include <iomanip>
+#include <limits>
+#include <map>
+#include <condition_variable>
+#include <atomic>
+#include <thread>
+
+// Multi-threaded MP4 export using ffmpeg (forward declaration)
+void ExportToMP4_MT();
+
+// Helper: render current view into RGB24 buffer using full-resolution image
+static void RenderViewToBufferHQ(
+    unsigned char* buffer,
+    int outW,
+    int outH,
+    const unsigned char* src,
+    int srcW,
+    int srcH,
+    const ViewState& view,
+    const AppSettings& settings
+) {
+    // Compute fit scale as in GetFitScale
+    double scaleX = static_cast<double>(settings.windowWidth) / srcW;
+    double scaleY = static_cast<double>(settings.windowHeight) / srcH;
+    double fitScale = std::min(scaleX, scaleY);
+
+    double currentScale = fitScale * view.zoomLevel;
+
+    // Visible region in source coordinates (for reference)
+    double visibleW = settings.windowWidth / currentScale;
+    double visibleH = settings.windowHeight / currentScale;
+
+    // Center of view in source coordinates (full-res)
+    // Interpret panX/panY as offsets in window space, scaled into source space
+    double centerX = srcW / 2.0 + view.panX * (visibleW / settings.windowWidth);
+    double centerY = srcH / 2.0 + view.panY * (visibleH / settings.windowHeight);
+
+    // For each output pixel, map back to source image
+    for (int y = 0; y < outH; ++y) {
+        for (int x = 0; x < outW; ++x) {
+            double srcX = (x - outW / 2.0) / currentScale + centerX;
+            double srcY = (y - outH / 2.0) / currentScale + centerY;
+
+            int ix = static_cast<int>(srcX);
+            int iy = static_cast<int>(srcY);
+
+            unsigned char* dst = buffer + (static_cast<size_t>(y) * outW + x) * 3;
+
+            if (ix >= 0 && ix < srcW && iy >= 0 && iy < srcH) {
+                const unsigned char* srcPix = src + (static_cast<size_t>(iy) * srcW + ix) * 3;
+                dst[0] = srcPix[0];
+                dst[1] = srcPix[1];
+                dst[2] = srcPix[2];
+            } else {
+                dst[0] = dst[1] = dst[2] = 0;
+            }
+        }
+    }
+}
 
 // Signal handler for Ctrl+C
 void signalHandler(int signum) {
-    std::cout << "\n\nInterrupt received (Ctrl+C), stopping..." << std::endl;
     g_interrupted.store(true);
 }
 
@@ -284,7 +343,6 @@ int main(int argc, char* argv[]) {
     std::cout << "Shrink factor: " << (g_settings.shrinkFactor == 0 ? "auto" : std::to_string(g_settings.shrinkFactor)) << std::endl;
     std::cout << "Load every " << g_settings.nthFrame << "-th image" << std::endl;
     std::cout << "Threads: " << g_settings.numThreads << std::endl;
-    std::cout << "(Press Ctrl+C to interrupt loading)" << std::endl;
     
     // Check for folder argument
     if (g_settings.initialFolder.empty()) {
@@ -411,6 +469,11 @@ int main(int argc, char* argv[]) {
                             g_view.reset();
                             UpdateWindowTitle();
                             break;
+                        case SDLK_s:
+                            g_view.isPlaying = false;
+                            std::cout << "\n[S] pressed: starting MULTI-THREADED MP4 export..." << std::endl;
+                            ExportToMP4_MT();
+                            break;
                     }
                     break;
                 
@@ -494,4 +557,160 @@ int main(int argc, char* argv[]) {
     SDL_Quit();
     
     return 0;
+}
+
+// Multi-threaded MP4 export using ffmpeg
+void ExportToMP4_MT() {
+    if (g_images.allFilePaths.empty()) {
+        std::cerr << "No images loaded to export!" << std::endl;
+        return;
+    }
+
+    bool wasPlaying = g_view.isPlaying;
+    g_view.isPlaying = false;
+
+    int fps = 30;
+    int winW = g_settings.windowWidth;
+    int winH = g_settings.windowHeight;
+    size_t totalFrames = g_images.allFilePaths.size();
+    int numExportThreads = g_settings.numThreads;
+    if (numExportThreads < 1) numExportThreads = 1;
+
+    size_t frameBufferSize = static_cast<size_t>(winW) * winH * 3;
+
+    std::string filename = "export_output_mt.mp4";
+    std::cout << "\n[S] pressed: starting MULTI-THREADED MP4 export..." << std::endl;
+    std::cout << "Output file : " << filename << std::endl;
+    std::cout << "Resolution  : " << winW << " x " << winH << std::endl;
+    std::cout << "FPS         : " << fps << std::endl;
+    std::cout << "Total frames: " << totalFrames << std::endl;
+    std::cout << "Threads     : " << numExportThreads << std::endl;
+
+    char cmd[1024];
+    std::snprintf(cmd, sizeof(cmd),
+        "ffmpeg -y -f rawvideo -pixel_format rgb24 -video_size %dx%d -framerate %d -i - "
+        "-c:v libx264 -pix_fmt yuv420p -crf 18 \"%s\"",
+        winW, winH, fps, filename.c_str());
+
+    FILE* ffmpeg = popen(cmd, "w");
+    if (!ffmpeg) {
+        std::cerr << "Failed to start ffmpeg. Is it installed and in PATH?" << std::endl;
+        g_view.isPlaying = wasPlaying;
+        return;
+    }
+
+    std::mutex queueMutex;
+    std::condition_variable queueNotFull;
+    std::condition_variable queueNotEmpty;
+    std::map<size_t, unsigned char*> renderedFrames;
+    std::atomic<size_t> nextFrameToRender(0);
+    size_t nextFrameToWrite = 0;
+
+    size_t maxQueueSize = static_cast<size_t>(numExportThreads) * 2;
+
+    ViewState capturedView = g_view;
+    AppSettings capturedSettings = g_settings;
+
+    auto renderWorker = [&]() {
+        while (true) {
+            size_t idx = nextFrameToRender.fetch_add(1);
+            if (idx >= totalFrames) break;
+            if (g_interrupted.load()) break;
+
+            unsigned char* buffer = new unsigned char[frameBufferSize];
+            std::memset(buffer, 0, frameBufferSize);
+
+            int w, h, channels;
+            unsigned char* data = stbi_load(g_images.allFilePaths[idx].c_str(), &w, &h, &channels, 3);
+            if (data) {
+                RenderViewToBufferHQ(buffer, winW, winH,
+                                     data, w, h,
+                                     capturedView, capturedSettings);
+                stbi_image_free(data);
+            }
+
+            {
+                std::unique_lock<std::mutex> lock(queueMutex);
+                queueNotFull.wait(lock, [&]() {
+                    return renderedFrames.size() < maxQueueSize || g_interrupted.load();
+                });
+                if (g_interrupted.load()) {
+                    delete[] buffer;
+                    break;
+                }
+                renderedFrames[idx] = buffer;
+            }
+            queueNotEmpty.notify_one();
+        }
+    };
+
+    std::vector<std::thread> workers;
+    workers.reserve(numExportThreads);
+    for (int i = 0; i < numExportThreads; ++i) {
+        workers.emplace_back(renderWorker);
+    }
+
+    auto start = std::chrono::high_resolution_clock::now();
+
+    while (nextFrameToWrite < totalFrames && !g_interrupted.load()) {
+        unsigned char* frameData = nullptr;
+
+        {
+            std::unique_lock<std::mutex> lock(queueMutex);
+            queueNotEmpty.wait(lock, [&]() {
+                return renderedFrames.find(nextFrameToWrite) != renderedFrames.end()
+                       || g_interrupted.load();
+            });
+
+            if (g_interrupted.load()) break;
+
+            frameData = renderedFrames[nextFrameToWrite];
+            renderedFrames.erase(nextFrameToWrite);
+        }
+        queueNotFull.notify_one();
+
+        std::fwrite(frameData, 1, frameBufferSize, ffmpeg);
+        delete[] frameData;
+
+        ++nextFrameToWrite;
+
+        double progress = 100.0 * nextFrameToWrite / totalFrames;
+        auto now = std::chrono::high_resolution_clock::now();
+        double elapsed = std::chrono::duration<double>(now - start).count();
+        double fps_actual = nextFrameToWrite / std::max(0.001, elapsed);
+        double eta = (totalFrames - nextFrameToWrite) / std::max(0.001, fps_actual);
+
+        if (g_window) {
+            char title[256];
+            std::snprintf(title, sizeof(title),
+                          "Exporting MT: %zu/%zu (%.1f%%)",
+                          nextFrameToWrite, totalFrames, progress);
+            SDL_SetWindowTitle(g_window, title);
+        }
+
+        std::cout << "\rFrame " << nextFrameToWrite << "/" << totalFrames
+                  << " (" << std::fixed << std::setprecision(1) << progress << "%)"
+                  << " - " << fps_actual << " fps"
+                  << " - ETA: " << (int)(eta / 60) << "m " << (int)eta % 60 << "s" << std::flush;
+    }
+
+    for (auto& t : workers) {
+        if (t.joinable()) t.join();
+    }
+
+    std::cout << std::endl;
+    pclose(ffmpeg);
+
+    auto end = std::chrono::high_resolution_clock::now();
+    double totalTime = std::chrono::duration<double>(end - start).count();
+
+    if (g_interrupted.load()) {
+        std::cout << "\nExport interrupted by user." << std::endl;
+    } else {
+        std::cout << "\nExport complete in " << (int)(totalTime / 60) << "m "
+                  << (int)totalTime % 60 << "s" << std::endl;
+    }
+
+    UpdateWindowTitle();
+    g_view.isPlaying = wasPlaying;
 }

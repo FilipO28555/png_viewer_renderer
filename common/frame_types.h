@@ -22,7 +22,7 @@ struct AppSettings {
     int windowHeight = 1000;
     int shrinkFactor = 0;       // 0 = auto-calculate based on window size
     int nthFrame = 1;           // Load every n-th frame (1 = all frames)
-    int numThreads = 12;        // Number of threads for loading and export
+    int numThreads = 72;        // Number of threads for loading and export
     std::string initialFolder;  // Starting folder (empty = prompt or current dir)
     
     // Zoom limits
