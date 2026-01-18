@@ -1,6 +1,8 @@
 # PNG Image Viewer & MP4 Exporter
 
-A fast, multi-threaded PNG image sequence viewer for Windows with high-quality MP4 export capabilities. Designed for viewing and exporting large image sequences (e.g., simulation outputs).
+A fast, multi-threaded PNG image sequence viewer with high-quality MP4 export capabilities. Designed for viewing and exporting large image sequences (e.g., simulation outputs).
+
+**Available for Windows and Linux.**
 
 ## Features
 
@@ -8,74 +10,70 @@ A fast, multi-threaded PNG image sequence viewer for Windows with high-quality M
 - **Multi-threaded loading**: Parallel image loading for quick startup
 - **Zoom & pan**: Mouse wheel to zoom, drag to pan
 - **Animation playback**: Play through sequences with real-time FPS display
-- **High-quality MP4 export**: Exports using original full-resolution files
-- **Multi-threaded export**: Parallel rendering for fast exports
+- **High-quality MP4 export**: Exports using original full-resolution files (Windows)
+- **Multi-threaded export**: Parallel rendering for fast exports (Windows)
 - **Memory efficient**: Only keeps preview images in RAM; exports read originals on-the-fly
 
-## Requirements
+## Repository Structure
 
-- Windows OS
-- [stb_image.h](https://github.com/nothings/stb) - Single-file image loading library
-- [FFmpeg](https://ffmpeg.org/) - Required for MP4 export (must be in PATH)
-- C++11 compatible compiler (g++, MSVC, etc.)
-
-## Compilation
-
-### 1. Download stb_image.h
-
-Download `stb_image.h` from the [stb repository](https://github.com/nothings/stb/blob/master/stb_image.h) and place it in the same directory as `display_image.cpp`.
-
-```bash
-curl -O https://raw.githubusercontent.com/nothings/stb/master/stb_image.h
+```
+png_viewer_renderer/
+├── common/                    # Shared platform-independent code
+│   ├── stb_image.h           # Image loading library
+│   ├── frame_types.h         # Common data structures
+│   ├── math_utils.h          # Zoom/pan calculations
+│   ├── image_loader.h        # Image loading interface
+│   └── image_loader.cpp      # Image loading implementation
+├── linux/                     # Linux-specific code
+│   ├── display_image_linux.cpp
+│   ├── Makefile
+│   └── README.md
+├── display_image.cpp          # Windows GDI implementation
+├── README.md                  # This file
+└── PORTING_GUIDE_LINUX.md    # Original porting notes
 ```
 
-### 2. Compile with g++ (MinGW)
+## Quick Start
+
+### Windows
 
 ```bash
+# Compile with g++ (MinGW)
 g++ -o display_image.exe display_image.cpp -lgdi32 -lcomdlg32 -lole32 -O2 -std=c++11
-```
 
-### 3. Compile with MSVC
-
-```bash
+# Or with MSVC
 cl /O2 /EHsc display_image.cpp gdi32.lib comdlg32.lib ole32.lib shell32.lib
+
+# Run
+display_image.exe
 ```
 
-## Usage
+### Linux
 
 ```bash
-display_image.exe [options]
+cd linux
+
+# Install SDL2
+sudo apt install libsdl2-dev  # Debian/Ubuntu
+
+# Build
+make
+
+# Run
+./display_image -f /path/to/images
 ```
 
-### Command Line Options
+## Command Line Options
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `-s, --shrink <factor>` | Shrink factor for preview images | Auto (image ~2× window size) |
-| `-n, --nth <n>` | Load every n-th image for preview | 1 (all images) |
+| `-f, --folder <path>` | Folder containing images (Linux only, required) | - |
+| `-s, --shrink <factor>` | Shrink factor for preview images | Auto |
+| `-n, --nth <n>` | Load every n-th image for preview | 1 |
 | `-x <width>` | Window width in pixels | 1000 |
 | `-y <height>` | Window height in pixels | 1000 |
 | `-t, --threads <n>` | Number of threads for loading/export | 12 |
 | `-h, --help` | Show help message | - |
-
-### Examples
-
-```bash
-# Default settings (auto shrink, 1000x1000 window)
-display_image.exe
-
-# Large window with 8 threads
-display_image.exe -x 1920 -y 1080 -t 8
-
-# Load every 10th image for quick preview
-display_image.exe -n 10
-
-# Force specific shrink factor
-display_image.exe -s 4
-
-# Combine options
-display_image.exe -x 1280 -y 720 -n 5 -t 16 -s 2
-```
 
 ## Controls
 
@@ -86,12 +84,11 @@ display_image.exe -x 1280 -y 720 -n 5 -t 16 -s 2
 | **End** | Last image |
 | **Space** | Play/Pause animation |
 | **J** | Reverse playback direction |
-| **S** | Export current view to MP4 |
-| **E** | Export view settings to file |
+| **S** | Export current view to MP4 (Windows) |
 | **Mouse Wheel** | Zoom in/out |
 | **Left Mouse Drag** | Pan |
 | **R** | Reset zoom/pan |
-| **ESC** | Change folder |
+| **ESC** | Change folder (Windows) / Quit (Linux) |
 | **Q** | Quit |
 
 ## File Naming Convention
@@ -106,31 +103,37 @@ Examples of valid filenames:
 
 Images are automatically sorted by their numeric suffix.
 
-## Export Features
+## Platform Comparison
 
-### High-Quality MP4 Export (Press S)
+| Feature | Windows | Linux |
+|---------|---------|-------|
+| Graphics | GDI | SDL2 |
+| Folder selection | GUI dialog | Command line `-f` |
+| MP4 export | ✅ Full support | 🔜 Planned |
+| File dialogs | Native | Command line |
 
-- Exports **all files** in the folder (not just the loaded preview subset)
-- Uses **original full-resolution** source files
-- Renders at the **current zoom/pan view**
-- Multi-threaded for fast processing
-- Output resolution matches window size (`-x` and `-y` options)
+## Requirements
 
-This means you can:
-1. Load with `-n 10 -s 8` for quick preview (low memory)
-2. Navigate and zoom into an interesting region
-3. Press **S** to export all frames at full quality
+### Windows
+- [stb_image.h](https://github.com/nothings/stb) - Single-file image loading library
+- [FFmpeg](https://ffmpeg.org/) - Required for MP4 export (must be in PATH)
+- C++11 compatible compiler (g++, MSVC, etc.)
 
-### Memory Usage
+### Linux
+- SDL2 development libraries (`libsdl2-dev`)
+- g++ with C++17 support
+- stb_image.h (included in `common/`)
+- FFmpeg (for future MP4 export)
+
+## Memory Usage
 
 **During preview:**
 - Only shrunk preview images are kept in RAM
-- Example: 1000 images at 2000×2000 preview = ~12 GB RAM
+- Auto-shrink targets ~2× window size for preview images
 
-**During export:**
+**During export (Windows):**
 - One source image loaded at a time per thread
 - Bounded queue prevents memory explosion
-- Example with 12 threads, 4000×4000 source: ~650 MB peak
 
 ## License
 
@@ -139,4 +142,5 @@ This project is provided as-is for personal and academic use.
 ## Acknowledgments
 
 - [stb](https://github.com/nothings/stb) - Single-file public domain libraries by Sean Barrett
+- [SDL2](https://www.libsdl.org/) - Cross-platform multimedia library
 - [FFmpeg](https://ffmpeg.org/) - Complete, cross-platform solution for video processing
