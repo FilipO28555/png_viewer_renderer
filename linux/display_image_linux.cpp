@@ -573,7 +573,13 @@ void ExportToMP4_MT() {
 
     size_t frameBufferSize = static_cast<size_t>(winW) * winH * 3;
 
-    std::string filename = "export_output_mt.mp4";
+    // Place the output MP4 in the same directory as the -f folder
+    std::string folder = g_settings.initialFolder;
+    // Remove trailing slash if present
+    while (!folder.empty() && folder.back() == '/') {
+        folder.pop_back();
+    }
+    std::string filename = folder + "/export_output_mt.mp4";
     std::cout << "\n[S] pressed: starting MULTI-THREADED MP4 export..." << std::endl;
     std::cout << "Output file : " << filename << std::endl;
     std::cout << "Resolution  : " << winW << " x " << winH << std::endl;
@@ -618,17 +624,9 @@ void ExportToMP4_MT() {
             int w, h, channels;
             unsigned char* data = stbi_load(g_images.allFilePaths[idx].c_str(), &w, &h, &channels, 3);
             if (data) {
-                // Scale pan/zoom from preview (window) to full-res coordinates for export
-                ViewState exportView = capturedView;
-                double scaleX = (double)w / (double)winW;
-                double scaleY = (double)h / (double)winH;
-                exportView.panX = capturedView.panX * scaleX;
-                exportView.panY = capturedView.panY * scaleY;
-                exportView.zoomLevel = capturedView.zoomLevel; // zoomLevel is a ratio, so keep as-is
-
                 RenderViewToBufferHQ(buffer, winW, winH,
                                      data, w, h,
-                                     exportView, capturedSettings);
+                                     capturedView, capturedSettings);
                 stbi_image_free(data);
             }
 
