@@ -31,6 +31,10 @@
 // Multi-threaded MP4 export using ffmpeg (forward declaration)
 void ExportToMP4_MT();
 
+// Forward declarations
+bool CreateTexture();
+bool SwitchToZHeight(int newZIndex);
+
 // Helper: render current view into RGB24 buffer using full-resolution image
 static void RenderViewToBufferHQ(
     unsigned char* buffer,
@@ -40,10 +44,20 @@ static void RenderViewToBufferHQ(
     int srcW,
     int srcH,
     const ViewState& view,
-    const AppSettings& settings
+    const AppSettings& settings,
+    int displayedImageW,
+    int displayedImageH
 ) {
-    // Use the same math as the preview (RenderFrame)
-    RenderParams params = CalculateRenderParams(view, settings, srcW, srcH);
+    // BUG FIX: Scale view parameters from displayed (shrunk) image to full-res image
+    // The view.panX/panY are in displayed image coordinates, need to scale to full-res
+    double scaleFactor = (double)srcW / displayedImageW;
+    
+    ViewState scaledView = view;
+    scaledView.panX *= scaleFactor;
+    scaledView.panY *= scaleFactor;
+    
+    // Use the same math as the preview (RenderFrame), but with full-res dimensions
+    RenderParams params = CalculateRenderParams(scaledView, settings, srcW, srcH);
     // params.srcX, srcY, srcW, srcH: region in source image
     // params.dstX, dstY, dstW, dstH: region in output buffer
 
@@ -122,7 +136,49 @@ std::vector<std::string> FindPngFiles(const std::string& directory) {
     return files;
 }
 
-// Load images from folder
+// Find all z-folders (z<number>) in a directory for 3D mode
+std::vector<std::pair<int, std::string>> FindZFolders(const std::string& directory) {
+    std::vector<std::pair<int, std::string>> zFolders;
+    
+    DIR* dir = opendir(directory.c_str());
+    if (!dir) {
+        std::cerr << "Could not open directory: " << directory << std::endl;
+        return zFolders;
+    }
+    
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != nullptr) {
+        std::string name = entry->d_name;
+        
+        // Skip . and ..
+        if (name == "." || name == "..") continue;
+        
+        // Check if it starts with 'z' and is a directory
+        if (name.size() > 1 && name[0] == 'z') {
+            std::string fullPath = directory + "/" + name;
+            struct stat st;
+            if (stat(fullPath.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+                // Extract the number after 'z'
+                try {
+                    int zHeight = std::stoi(name.substr(1));
+                    zFolders.push_back({zHeight, name});
+                } catch (...) {
+                    // Skip folders that don't have a valid number
+                }
+            }
+        }
+    }
+    
+    closedir(dir);
+    
+    // Sort by z-height
+    std::sort(zFolders.begin(), zFolders.end(),
+        [](const auto& a, const auto& b) { return a.first < b.first; });
+    
+    return zFolders;
+}
+
+// Load images from folder (2D mode - single folder with PNGs)
 bool LoadImagesFromFolder(const std::string& folder) {
     int shrinkFactor = g_settings.shrinkFactor;
     
@@ -169,9 +225,11 @@ bool LoadImagesFromFolder(const std::string& folder) {
         allFilePaths.push_back(folder + "/" + vf.first);
     }
     
-    std::cout << "Found " << validFiles.size() << " matching images (*_<number>.png)" << std::endl;
-    if (g_settings.nthFrame > 1) {
-        std::cout << "Loading every " << g_settings.nthFrame << "-th image: " << files.size() << " images" << std::endl;
+    if (g_settings.debugMode) {
+        std::cout << "Found " << validFiles.size() << " matching images (*_<number>.png)" << std::endl;
+        if (g_settings.nthFrame > 1) {
+            std::cout << "Loading every " << g_settings.nthFrame << "-th image: " << files.size() << " images" << std::endl;
+        }
     }
     
     // Load images (RGB output, no vertical flip for SDL2)
@@ -187,6 +245,231 @@ bool LoadImagesFromFolder(const std::string& folder) {
     }
     
     return success;
+}
+
+// Load images from z-folders (3D mode - folder contains z<number> subfolders)
+bool LoadImagesFrom3DFolder(const std::string& baseFolder) {
+    int shrinkFactor = g_settings.shrinkFactor;
+    
+    // Find all z-folders
+    auto zFolders = FindZFolders(baseFolder);
+    if (zFolders.empty()) {
+        std::cerr << "No z-folders found in " << baseFolder << std::endl;
+        return false;
+    }
+    
+    if (g_settings.debugMode) {
+        std::cout << "Found " << zFolders.size() << " z-folders (3D mode)" << std::endl;
+    }
+    
+    // Store z-heights
+    g_images.zHeights.clear();
+    g_images.zAllFilePaths.clear();
+    for (const auto& [zHeight, folderName] : zFolders) {
+        g_images.zHeights.push_back(zHeight);
+    }
+    
+    // Start at middle z-height
+    g_images.currentZIndex = g_images.zHeights.size() / 2;
+    
+    if (g_settings.debugMode) {
+        std::cout << "Loading z-heights: ";
+        for (size_t i = 0; i < g_images.zHeights.size(); ++i) {
+            if (i > 0) std::cout << ", ";
+            std::cout << "z" << g_images.zHeights[i];
+        }
+        std::cout << std::endl;
+        std::cout << "Starting at z" << g_images.zHeights[g_images.currentZIndex] << std::endl;
+    }
+    
+    // Load all z-folders' file lists (but only load images for current z)
+    if (g_settings.debugMode) {
+        std::cout << "Scanning all z-folders for file lists..." << std::endl;
+    }
+    for (size_t zIdx = 0; zIdx < zFolders.size(); ++zIdx) {
+        std::string folder = baseFolder + "/" + zFolders[zIdx].second;
+        std::vector<std::string> allFiles = FindPngFiles(folder);
+        
+        if (g_settings.debugMode) {
+            std::cout << "  z" << g_images.zHeights[zIdx] << " (" << folder << "): " 
+                      << allFiles.size() << " PNG files";
+        }
+        
+        // Filter and sort by index
+        std::vector<std::pair<std::string, int>> validFiles;
+        for (const auto& file : allFiles) {
+            int idx = ExtractIndex(file);
+            if (idx >= 0) {
+                validFiles.push_back({file, idx});
+            }
+        }
+        
+        std::sort(validFiles.begin(), validFiles.end(),
+            [](const auto& a, const auto& b) { return a.second < b.second; });
+        
+        // Store all file paths for this z-height
+        std::vector<std::string> zFiles;
+        for (const auto& vf : validFiles) {
+            zFiles.push_back(folder + "/" + vf.first);
+        }
+        g_images.zAllFilePaths.push_back(zFiles);
+        
+        if (g_settings.debugMode) {
+            std::cout << " -> " << zFiles.size() << " valid files" << std::endl;
+        }
+    }
+    if (g_settings.debugMode) {
+        std::cout << "Total z-heights loaded: " << g_images.zAllFilePaths.size() << std::endl;
+    }
+    
+    // Auto-calculate shrink factor if needed
+    if (shrinkFactor == 0 && g_images.currentZIndex < (int)g_images.zAllFilePaths.size() 
+        && !g_images.zAllFilePaths[g_images.currentZIndex].empty()) {
+        shrinkFactor = AutoCalculateShrinkFactor(
+            g_images.zAllFilePaths[g_images.currentZIndex][0],
+            g_settings.windowWidth, g_settings.windowHeight);
+    }
+    
+    if (g_settings.debugMode) {
+        std::cout << "\nLoading ALL z-heights into memory..." << std::endl;
+        std::cout << "Shrink factor: " << shrinkFactor << std::endl;
+    }
+    
+    // Load all z-heights into memory
+    g_images.zFrames.resize(zFolders.size());
+    size_t totalMemory = 0;
+    
+    for (size_t zIdx = 0; zIdx < zFolders.size(); ++zIdx) {
+        const std::vector<std::string>& allFilePaths = g_images.zAllFilePaths[zIdx];
+        
+        if (allFilePaths.empty()) {
+            if (g_settings.debugMode) {
+                std::cout << "  z" << g_images.zHeights[zIdx] << ": no files, skipping" << std::endl;
+            }
+            continue;
+        }
+        
+        // Select every n-th file for preview
+        std::vector<std::string> files;
+        for (size_t i = 0; i < allFilePaths.size(); i += g_settings.nthFrame) {
+            files.push_back(allFilePaths[i]);
+        }
+        if (!allFilePaths.empty() && (allFilePaths.size() - 1) % g_settings.nthFrame != 0) {
+            files.push_back(allFilePaths.back());
+        }
+        
+        // Extract folder from first file path
+        std::string currentFolder;
+        if (!allFilePaths.empty()) {
+            size_t lastSlash = allFilePaths[0].find_last_of('/');
+            if (lastSlash != std::string::npos) {
+                currentFolder = allFilePaths[0].substr(0, lastSlash);
+            }
+        }
+        
+        if (g_settings.debugMode) {
+            std::cout << "  z" << g_images.zHeights[zIdx] << ": loading " << files.size() << " images... " << std::flush;
+        }
+        
+        // Load images into temporary collection
+        ImageCollection tempCollection;
+        bool success = LoadImagesCommon(
+            tempCollection, files, allFilePaths, currentFolder,
+            shrinkFactor, g_settings.numThreads,
+            true,   // rgbOutput
+            false   // flipVertical
+        );
+        
+        if (success) {
+            // Move frames to zFrames
+            g_images.zFrames[zIdx] = std::move(tempCollection.frames);
+            size_t zMem = g_images.zFrames[zIdx].size() * g_images.imageWidth * g_images.imageHeight * 3;
+            totalMemory += zMem;
+            if (g_settings.debugMode) {
+                std::cout << "done (" << (zMem / (1024.0 * 1024.0 * 1024.0)) << " GB)" << std::endl;
+            }
+            
+            // Store dimensions from first z-height
+            if (zIdx == 0) {
+                g_images.imageWidth = tempCollection.imageWidth;
+                g_images.imageHeight = tempCollection.imageHeight;
+                g_images.originalImageWidth = tempCollection.originalImageWidth;
+                g_images.originalImageHeight = tempCollection.originalImageHeight;
+            }
+        } else {
+            std::cerr << "failed!" << std::endl;
+            return false;
+        }
+    }
+    
+    if (g_settings.debugMode) {
+        std::cout << "\nTotal memory for all z-heights: " << (totalMemory / (1024.0 * 1024.0 * 1024.0)) << " GB" << std::endl;
+    }
+    
+    // Set current frames to point to current z-height
+    g_images.frames = g_images.zFrames[g_images.currentZIndex];
+    g_images.allFilePaths = g_images.zAllFilePaths[g_images.currentZIndex];
+    g_images.currentFolder = baseFolder + "/" + zFolders[g_images.currentZIndex].second;
+    g_images.using3DMode = true;  // Enable 3D mode to prevent double-free
+    
+    if (g_settings.debugMode) {
+        std::cout << "\nStarting at z" << g_images.zHeights[g_images.currentZIndex] 
+                  << " with " << g_images.frames.size() << " frames loaded" << std::endl;
+    }
+    
+    g_view.reset();
+    return true;
+}
+
+// Switch to a different z-height in 3D mode
+bool SwitchToZHeight(int newZIndex) {
+    if (g_settings.debugMode) {
+        std::cout << "SwitchToZHeight called: " << newZIndex 
+                  << " (current: " << g_images.currentZIndex 
+                  << ", total z-heights: " << g_images.zHeights.size() 
+                  << ", zFrames.size: " << g_images.zFrames.size() << ")" << std::endl;
+    }
+    
+    if (newZIndex < 0 || newZIndex >= (int)g_images.zHeights.size()) {
+        if (g_settings.debugMode) {
+            std::cout << "  Out of range!" << std::endl;
+        }
+        return false;
+    }
+    
+    if (newZIndex == g_images.currentZIndex) {
+        if (g_settings.debugMode) {
+            std::cout << "  Already at this z-height" << std::endl;
+        }
+        return true;  // Already at this z-height
+    }
+    
+    // Save current frame position to try to maintain it
+    int savedFramePosition = g_images.currentFrame;
+    
+    // Update z-index
+    int oldZIndex = g_images.currentZIndex;
+    g_images.currentZIndex = newZIndex;
+    
+    if (g_settings.debugMode) {
+        std::cout << "Switching from z" << g_images.zHeights[oldZIndex] 
+                  << " to z" << g_images.zHeights[newZIndex] << " (instant - already in memory)" << std::endl;
+    }
+    
+    // Switch frames reference (no reloading needed!)
+    g_images.frames = g_images.zFrames[newZIndex];
+    g_images.allFilePaths = g_images.zAllFilePaths[newZIndex];
+    
+    // Restore frame position, clamped to new frame count
+    g_images.currentFrame = std::min(savedFramePosition, (int)g_images.frames.size() - 1);
+    if (g_images.currentFrame < 0) g_images.currentFrame = 0;
+    
+    if (g_settings.debugMode && savedFramePosition != g_images.currentFrame) {
+        std::cout << "Frame position adjusted: " << (savedFramePosition + 1) << " -> " 
+                  << (g_images.currentFrame + 1) << std::endl;
+    }
+    
+    return true;
 }
 
 // Create or recreate the texture for current image dimensions
@@ -220,19 +503,28 @@ void UpdateWindowTitle() {
     if (!g_window || g_images.isEmpty()) return;
     
     char title[256];
+    std::string zInfo = "";
+    
+    // Add z-height info in 3D mode
+    if (g_settings.mode3D && !g_images.zHeights.empty()) {
+        zInfo = " [Z:" + std::to_string(g_images.zHeights[g_images.currentZIndex]) + "]";
+    }
+    
     if (g_view.isPlaying) {
         const char* direction = (g_view.playDirection > 0) ? ">" : "<";
-        snprintf(title, sizeof(title), "%s [%d/%zu] - %.1f FPS %s",
+        snprintf(title, sizeof(title), "%s [%d/%zu]%s - %.1f FPS %s",
                  g_images.frames[g_images.currentFrame].filename.c_str(),
                  g_images.currentFrame + 1,
                  g_images.size(),
+                 zInfo.c_str(),
                  g_view.currentFPS,
                  direction);
     } else {
-        snprintf(title, sizeof(title), "%s [%d/%zu] - Zoom: %.0f%%",
+        snprintf(title, sizeof(title), "%s [%d/%zu]%s - Zoom: %.0f%%",
                  g_images.frames[g_images.currentFrame].filename.c_str(),
                  g_images.currentFrame + 1,
                  g_images.size(),
+                 zInfo.c_str(),
                  g_view.zoomLevel * 100.0);
     }
     SDL_SetWindowTitle(g_window, title);
@@ -300,25 +592,36 @@ void ParseArguments(int argc, char* argv[]) {
             g_settings.initialFolder = argv[i + 1];
             i++;
         }
+        else if (strcmp(argv[i], "--3d") == 0 || strcmp(argv[i], "--3D") == 0) {
+            g_settings.mode3D = true;
+        }
+        else if (strcmp(argv[i], "--debug") == 0) {
+            g_settings.debugMode = true;
+        }
         else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             std::cout << "Usage: " << argv[0] << " [options]" << std::endl;
             std::cout << "Options:" << std::endl;
             std::cout << "  -f, --folder <path>    Folder containing images (required)" << std::endl;
+            std::cout << "  --3d, --3D             3D mode: folder contains z<number> subfolders" << std::endl;
+            std::cout << "  --debug                Show debug output" << std::endl;
             std::cout << "  -s, --shrink <factor>  Shrink factor for images (default: auto)" << std::endl;
             std::cout << "  -n, --nth <n>          Load every n-th image (default: 1)" << std::endl;
             std::cout << "  -x <width>             Window width in pixels (default: 1000)" << std::endl;
             std::cout << "  -y <height>            Window height in pixels (default: 1000)" << std::endl;
-            std::cout << "  -t, --threads <n>      Number of threads (default: 12)" << std::endl;
+            std::cout << "  -t, --threads <n>      Number of threads (default: 72)" << std::endl;
             std::cout << "  -h, --help             Show this help message" << std::endl;
             std::cout << "\nControls:" << std::endl;
             std::cout << "  Left/Right Arrow, A/D: Navigate frames" << std::endl;
-            std::cout << "  Home/End: First/Last frame" << std::endl;
-            std::cout << "  Space: Play/Pause" << std::endl;
-            std::cout << "  J: Reverse playback direction" << std::endl;
-            std::cout << "  Mouse Wheel: Zoom in/out" << std::endl;
-            std::cout << "  Left Drag: Pan" << std::endl;
-            std::cout << "  R: Reset view" << std::endl;
-            std::cout << "  Q/Escape: Quit" << std::endl;
+            std::cout << "  Up/Down Arrow:         Change z-height (3D mode only)" << std::endl;
+            std::cout << "  Home/End:              First/Last frame" << std::endl;
+            std::cout << "  Space:                 Play/Pause" << std::endl;
+            std::cout << "  J:                     Reverse playback direction" << std::endl;
+            std::cout << "  Mouse Wheel:           Zoom in/out" << std::endl;
+            std::cout << "  Shift + Mouse Wheel:   Change z-height (3D mode only)" << std::endl;
+            std::cout << "  Left Drag:             Pan" << std::endl;
+            std::cout << "  R:                     Reset view" << std::endl;
+            std::cout << "  S:                     Export to MP4" << std::endl;
+            std::cout << "  Q/Escape:              Quit" << std::endl;
             exit(0);
         }
     }
@@ -334,6 +637,7 @@ int main(int argc, char* argv[]) {
     
     std::cout << "PNG Image Viewer (Linux/SDL2)" << std::endl;
     std::cout << "=============================" << std::endl;
+    std::cout << "Mode: " << (g_settings.mode3D ? "3D (z-slices)" : "2D") << std::endl;
     std::cout << "Window: " << g_settings.windowWidth << " x " << g_settings.windowHeight << std::endl;
     std::cout << "Shrink factor: " << (g_settings.shrinkFactor == 0 ? "auto" : std::to_string(g_settings.shrinkFactor)) << std::endl;
     std::cout << "Load every " << g_settings.nthFrame << "-th image" << std::endl;
@@ -377,7 +681,14 @@ int main(int argc, char* argv[]) {
     }
     
     // Load images
-    if (!LoadImagesFromFolder(g_settings.initialFolder)) {
+    bool loadSuccess = false;
+    if (g_settings.mode3D) {
+        loadSuccess = LoadImagesFrom3DFolder(g_settings.initialFolder);
+    } else {
+        loadSuccess = LoadImagesFromFolder(g_settings.initialFolder);
+    }
+    
+    if (!loadSuccess) {
         std::cerr << "Failed to load images from: " << g_settings.initialFolder << std::endl;
         SDL_DestroyRenderer(g_renderer);
         SDL_DestroyWindow(g_window);
@@ -435,6 +746,37 @@ int main(int argc, char* argv[]) {
                             }
                             break;
                         
+                        case SDLK_UP:
+                            std::cout << "UP key pressed, mode3D=" << g_settings.mode3D 
+                                      << ", currentZIndex=" << g_images.currentZIndex 
+                                      << ", zHeights.size=" << g_images.zHeights.size() << std::endl;
+                            // In 3D mode, Up arrow increases z-height
+                            if (g_settings.mode3D) {
+                                if (g_images.currentZIndex < (int)g_images.zHeights.size() - 1) {
+                                    g_view.isPlaying = false;
+                                    SwitchToZHeight(g_images.currentZIndex + 1);
+                                    UpdateWindowTitle();
+                                } else {
+                                    std::cout << "  Already at highest z-height" << std::endl;
+                                }
+                            }
+                            break;
+                        
+                        case SDLK_DOWN:
+                            std::cout << "DOWN key pressed, mode3D=" << g_settings.mode3D 
+                                      << ", currentZIndex=" << g_images.currentZIndex << std::endl;
+                            // In 3D mode, Down arrow decreases z-height
+                            if (g_settings.mode3D) {
+                                if (g_images.currentZIndex > 0) {
+                                    g_view.isPlaying = false;
+                                    SwitchToZHeight(g_images.currentZIndex - 1);
+                                    UpdateWindowTitle();
+                                } else {
+                                    std::cout << "  Already at lowest z-height" << std::endl;
+                                }
+                            }
+                            break;
+                        
                         case SDLK_HOME:
                             g_images.currentFrame = 0;
                             UpdateWindowTitle();
@@ -473,12 +815,41 @@ int main(int argc, char* argv[]) {
                     break;
                 
                 case SDL_MOUSEWHEEL: {
-                    int mouseX, mouseY;
-                    SDL_GetMouseState(&mouseX, &mouseY);
-                    double zoomFactor = (event.wheel.y > 0) ? 1.15 : (1.0 / 1.15);
-                    ApplyZoom(g_view, g_settings, g_images.imageWidth, g_images.imageHeight,
-                              mouseX, mouseY, zoomFactor);
-                    UpdateWindowTitle();
+                    SDL_Keymod modState = SDL_GetModState();
+                    bool shiftPressed = (modState & KMOD_SHIFT) != 0;
+                    
+                    if (g_settings.debugMode) {
+                        std::cout << "MouseWheel event: y=" << event.wheel.y 
+                                  << ", shift=" << shiftPressed 
+                                  << ", mode3D=" << g_settings.mode3D << std::endl;
+                    }
+                    
+                    // In 3D mode with Shift pressed: change z-height
+                    if (g_settings.mode3D && shiftPressed) {
+                        int deltaZ = event.wheel.y; // positive = up, negative = down
+                        int newZIndex = g_images.currentZIndex + deltaZ;
+                        if (g_settings.debugMode) {
+                            std::cout << "  Attempting z-change: " << g_images.currentZIndex 
+                                      << " -> " << newZIndex << std::endl;
+                        }
+                        if (newZIndex >= 0 && newZIndex < (int)g_images.zHeights.size()) {
+                            g_view.isPlaying = false;
+                            SwitchToZHeight(newZIndex);
+                            UpdateWindowTitle();
+                        } else {
+                            if (g_settings.debugMode) {
+                                std::cout << "  Out of range!" << std::endl;
+                            }
+                        }
+                    } else {
+                        // Normal zoom behavior
+                        int mouseX, mouseY;
+                        SDL_GetMouseState(&mouseX, &mouseY);
+                        double zoomFactor = (event.wheel.y > 0) ? 1.15 : (1.0 / 1.15);
+                        ApplyZoom(g_view, g_settings, g_images.imageWidth, g_images.imageHeight,
+                                  mouseX, mouseY, zoomFactor);
+                        UpdateWindowTitle();
+                    }
                     break;
                 }
                 
@@ -579,13 +950,25 @@ void ExportToMP4_MT() {
     while (!folder.empty() && folder.back() == '/') {
         folder.pop_back();
     }
-    std::string filename = folder + "/export_output_mt.mp4";
+    
+    // In 3D mode, add z-height to filename
+    std::string filename;
+    if (g_settings.mode3D && !g_images.zHeights.empty()) {
+        filename = folder + "/export_output_z" + 
+                   std::to_string(g_images.zHeights[g_images.currentZIndex]) + "_mt.mp4";
+    } else {
+        filename = folder + "/export_output_mt.mp4";
+    }
+    
     std::cout << "\n[S] pressed: starting MULTI-THREADED MP4 export..." << std::endl;
     std::cout << "Output file : " << filename << std::endl;
     std::cout << "Resolution  : " << winW << " x " << winH << std::endl;
     std::cout << "FPS         : " << fps << std::endl;
     std::cout << "Total frames: " << totalFrames << std::endl;
     std::cout << "Threads     : " << numExportThreads << std::endl;
+    if (g_settings.mode3D && !g_images.zHeights.empty()) {
+        std::cout << "Z-height    : " << g_images.zHeights[g_images.currentZIndex] << std::endl;
+    }
 
     char cmd[1024];
     std::snprintf(cmd, sizeof(cmd),
@@ -611,6 +994,8 @@ void ExportToMP4_MT() {
 
     ViewState capturedView = g_view;
     AppSettings capturedSettings = g_settings;
+    int displayedW = g_images.imageWidth;
+    int displayedH = g_images.imageHeight;
 
     auto renderWorker = [&]() {
         while (true) {
@@ -624,9 +1009,11 @@ void ExportToMP4_MT() {
             int w, h, channels;
             unsigned char* data = stbi_load(g_images.allFilePaths[idx].c_str(), &w, &h, &channels, 3);
             if (data) {
+                // BUG FIX: Pass displayed image dimensions for proper view scaling
                 RenderViewToBufferHQ(buffer, winW, winH,
                                      data, w, h,
-                                     capturedView, capturedSettings);
+                                     capturedView, capturedSettings,
+                                     displayedW, displayedH);
                 stbi_image_free(data);
             }
 

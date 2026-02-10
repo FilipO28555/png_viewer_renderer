@@ -121,9 +121,19 @@ bool LoadImagesCommon(
         return false;
     }
     
+    // Save z-height data before cleanup (for 3D mode)
+    auto savedZHeights = collection.zHeights;
+    int savedZIndex = collection.currentZIndex;
+    auto savedZAllFilePaths = collection.zAllFilePaths;
+    
     collection.cleanup();
     collection.currentFolder = folder;
     collection.allFilePaths = allFilePaths;
+    
+    // Restore z-height data after cleanup (for 3D mode)
+    collection.zHeights = savedZHeights;
+    collection.currentZIndex = savedZIndex;
+    collection.zAllFilePaths = savedZAllFilePaths;
     
     std::cout << "\nFolder: " << folder << std::endl;
     std::cout << "Loading " << files.size() << " images with " << numThreads << " threads..." << std::endl;

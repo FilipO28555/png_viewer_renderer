@@ -24,6 +24,8 @@ struct AppSettings {
     int nthFrame = 1;           // Load every n-th frame (1 = all frames)
     int numThreads = 72;        // Number of threads for loading and export
     std::string initialFolder;  // Starting folder (empty = prompt or current dir)
+    bool mode3D = false;        // 3D mode: folder contains z-subfolders
+    bool debugMode = false;     // Show debug output
     
     // Zoom limits
     double minZoom = 1.0;
@@ -64,16 +66,49 @@ struct ImageCollection {
     int originalImageHeight = 0;
     std::string currentFolder;
     
-    bool isEmpty() const { return frames.empty(); }
-    size_t size() const { return frames.size(); }
+    // 3D mode: z-height navigation
+    std::vector<int> zHeights;           // Available z-heights (sorted)
+    int currentZIndex = 0;               // Index into zHeights vector
+    std::vector<std::vector<std::string>> zAllFilePaths;  // Per z-height file paths
+    std::vector<std::vector<ImageFrame>> zFrames;  // Per z-height loaded frames (all in memory)
+    bool using3DMode = false;  // Flag to indicate frames points into zFrames (don't double-free)
+    
+    bool isEmpty() const { 
+        if (using3DMode && currentZIndex < (int)zFrames.size()) {
+            return zFrames[currentZIndex].empty();
+        }
+        return frames.empty(); 
+    }
+    
+    size_t size() const { 
+        if (using3DMode && currentZIndex < (int)zFrames.size()) {
+            return zFrames[currentZIndex].size();
+        }
+        return frames.size(); 
+    }
     
     void cleanup() {
-        for (auto& frame : frames) {
-            if (frame.data) {
-                delete[] frame.data;
-                frame.data = nullptr;
+        // In 3D mode, only cleanup zFrames (frames is just a copy/reference)
+        if (using3DMode) {
+            for (auto& zFrameList : zFrames) {
+                for (auto& frame : zFrameList) {
+                    if (frame.data) {
+                        delete[] frame.data;
+                        frame.data = nullptr;
+                    }
+                }
+            }
+            frames.clear(); // Just clear the vector, don't delete data
+        } else {
+            // In 2D mode, cleanup frames normally
+            for (auto& frame : frames) {
+                if (frame.data) {
+                    delete[] frame.data;
+                    frame.data = nullptr;
+                }
             }
         }
+        
         frames.clear();
         allFilePaths.clear();
         currentFrame = 0;
@@ -81,6 +116,11 @@ struct ImageCollection {
         imageHeight = 0;
         originalImageWidth = 0;
         originalImageHeight = 0;
+        zHeights.clear();
+        currentZIndex = 0;
+        zAllFilePaths.clear();
+        zFrames.clear();
+        using3DMode = false;
     }
 };
 
