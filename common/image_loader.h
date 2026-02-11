@@ -40,7 +40,8 @@ bool LoadImagesCommon(
     int numThreads,
     bool rgbOutput,         // true for Linux/SDL2, false for Windows
     bool flipVertical,      // true for Windows GDI (bottom-up DIB)
-    ProgressCallback progressCallback = nullptr
+    ProgressCallback progressCallback = nullptr,
+    bool quietMode = false  // Suppress detailed output (for 3D batch loading)
 );
 
 #endif // IMAGE_LOADER_H

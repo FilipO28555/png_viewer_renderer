@@ -330,14 +330,34 @@ bool LoadImagesFrom3DFolder(const std::string& baseFolder) {
             g_settings.windowWidth, g_settings.windowHeight);
     }
     
+    // Print loading header
+    std::cout << "\nUsing " << g_settings.numThreads << " cores." << std::endl;
+    std::cout << "Memory usage:" << std::endl;
+    std::cout << "  Shrink factor: " << shrinkFactor << std::endl;
+    
+    // Get dimensions from first image
+    int probeW, probeH;
+    if (!g_images.zAllFilePaths.empty() && !g_images.zAllFilePaths[0].empty()) {
+        unsigned char* probeData = stbi_load(g_images.zAllFilePaths[0][0].c_str(), &probeW, &probeH, nullptr, 3);
+        if (probeData) {
+            stbi_image_free(probeData);
+            std::cout << "  Preview: " << (probeW / shrinkFactor) << " x " << (probeH / shrinkFactor) << std::endl;
+            std::cout << "  Original: " << probeW << " x " << probeH << std::endl;
+        }
+    }
+    
+    // Extract common base folder path
+    std::string commonPath = baseFolder;
+    std::cout << "Folder: " << commonPath << std::endl;
+    
     if (g_settings.debugMode) {
         std::cout << "\nLoading ALL z-heights into memory..." << std::endl;
-        std::cout << "Shrink factor: " << shrinkFactor << std::endl;
     }
     
     // Load all z-heights into memory
     g_images.zFrames.resize(zFolders.size());
     size_t totalMemory = 0;
+    size_t totalFrames = 0;
     
     for (size_t zIdx = 0; zIdx < zFolders.size(); ++zIdx) {
         const std::vector<std::string>& allFilePaths = g_images.zAllFilePaths[zIdx];
@@ -367,9 +387,8 @@ bool LoadImagesFrom3DFolder(const std::string& baseFolder) {
             }
         }
         
-        if (g_settings.debugMode) {
-            std::cout << "  z" << g_images.zHeights[zIdx] << ": loading " << files.size() << " images... " << std::flush;
-        }
+        // Print z-height label (will be on same line as loading progress)
+        std::cout << "z" << g_images.zHeights[zIdx] << " - " << std::flush;
         
         // Load images into temporary collection
         ImageCollection tempCollection;
@@ -377,34 +396,40 @@ bool LoadImagesFrom3DFolder(const std::string& baseFolder) {
             tempCollection, files, allFilePaths, currentFolder,
             shrinkFactor, g_settings.numThreads,
             true,   // rgbOutput
-            false   // flipVertical
+            false,  // flipVertical
+            nullptr, // progressCallback
+            true    // quietMode - suppress verbose output
         );
         
         if (success) {
-            // Move frames to zFrames
-            g_images.zFrames[zIdx] = std::move(tempCollection.frames);
-            size_t zMem = g_images.zFrames[zIdx].size() * g_images.imageWidth * g_images.imageHeight * 3;
-            totalMemory += zMem;
-            if (g_settings.debugMode) {
-                std::cout << "done (" << (zMem / (1024.0 * 1024.0 * 1024.0)) << " GB)" << std::endl;
-            }
-            
-            // Store dimensions from first z-height
+            // Store dimensions from first z-height FIRST
             if (zIdx == 0) {
                 g_images.imageWidth = tempCollection.imageWidth;
                 g_images.imageHeight = tempCollection.imageHeight;
                 g_images.originalImageWidth = tempCollection.originalImageWidth;
                 g_images.originalImageHeight = tempCollection.originalImageHeight;
             }
+            
+            // Move frames to zFrames
+            g_images.zFrames[zIdx] = std::move(tempCollection.frames);
+            size_t zMem = g_images.zFrames[zIdx].size() * g_images.imageWidth * g_images.imageHeight * 3;
+            totalMemory += zMem;
+            totalFrames += g_images.zFrames[zIdx].size();
+            
+            // Print RAM info on the same line after the progress completes
+            std::cout << " - RAM: " << (zMem / (1024.0 * 1024.0 * 1024.0)) << " GB (z" 
+                      << g_images.zHeights[zIdx] << ")" << std::endl;
+            
         } else {
             std::cerr << "failed!" << std::endl;
             return false;
         }
     }
     
-    if (g_settings.debugMode) {
-        std::cout << "\nTotal memory for all z-heights: " << (totalMemory / (1024.0 * 1024.0 * 1024.0)) << " GB" << std::endl;
-    }
+    // Print final summary
+    std::cout << "\nLoaded " << zFolders.size() << " x " << (totalFrames / zFolders.size()) 
+              << " images for preview." << std::endl;
+    std::cout << "Total RAM usage: " << (totalMemory / (1024.0 * 1024.0 * 1024.0)) << " GB" << std::endl;
     
     // Set current frames to point to current z-height
     g_images.frames = g_images.zFrames[g_images.currentZIndex];
