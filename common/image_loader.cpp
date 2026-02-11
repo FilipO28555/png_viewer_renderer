@@ -114,7 +114,8 @@ bool LoadImagesCommon(
     int numThreads,
     bool rgbOutput,
     bool flipVertical,
-    ProgressCallback progressCallback
+    ProgressCallback progressCallback,
+    bool quietMode
 ) {
     if (files.empty()) {
         std::cerr << "No files to load" << std::endl;
@@ -135,8 +136,10 @@ bool LoadImagesCommon(
     collection.currentZIndex = savedZIndex;
     collection.zAllFilePaths = savedZAllFilePaths;
     
-    std::cout << "\nFolder: " << folder << std::endl;
-    std::cout << "Loading " << files.size() << " images with " << numThreads << " threads..." << std::endl;
+    if (!quietMode) {
+        std::cout << "\nFolder: " << folder << std::endl;
+        std::cout << "Loading " << files.size() << " images with " << numThreads << " threads..." << std::endl;
+    }
     
     // Prepare frames vector
     collection.frames.resize(files.size());
@@ -183,6 +186,7 @@ bool LoadImagesCommon(
             {
                 std::lock_guard<std::mutex> lock(progressMutex);
                 loadedCount++;
+                // Always show progress (even in quiet mode), just suppress verbose headers
                 std::cout << "\rLoading: " << loadedCount << "/" << files.size() << std::flush;
                 
                 if (progressCallback) {
@@ -208,7 +212,9 @@ bool LoadImagesCommon(
     for (auto& thread : threads) {
         thread.join();
     }
-    std::cout << std::endl;
+    if (!quietMode) {
+        std::cout << std::endl;
+    }
     
     // Check if interrupted
     if (g_interrupted.load()) {
@@ -240,24 +246,26 @@ bool LoadImagesCommon(
     collection.currentFrame = 0;
     
     // Print memory stats
-    size_t bytesPerImage = (size_t)firstWidth * firstHeight * 3;
-    size_t totalBytes = bytesPerImage * collection.frames.size();
-    
-    std::cout << "\nMemory usage:" << std::endl;
-    std::cout << "  Shrink factor: " << shrinkFactor << std::endl;
-    std::cout << "  Preview: " << firstWidth << " x " << firstHeight << std::endl;
-    std::cout << "  Original: " << collection.originalImageWidth << " x " << collection.originalImageHeight << std::endl;
-    
-    if (totalBytes < 1024 * 1024) {
-        std::cout << "  Total RAM: " << (totalBytes / 1024.0) << " KB" << std::endl;
-    } else if (totalBytes < 1024 * 1024 * 1024) {
-        std::cout << "  Total RAM: " << (totalBytes / (1024.0 * 1024.0)) << " MB" << std::endl;
-    } else {
-        std::cout << "  Total RAM: " << (totalBytes / (1024.0 * 1024.0 * 1024.0)) << " GB" << std::endl;
+    if (!quietMode) {
+        size_t bytesPerImage = (size_t)firstWidth * firstHeight * 3;
+        size_t totalBytes = bytesPerImage * collection.frames.size();
+        
+        std::cout << "\nMemory usage:" << std::endl;
+        std::cout << "  Shrink factor: " << shrinkFactor << std::endl;
+        std::cout << "  Preview: " << firstWidth << " x " << firstHeight << std::endl;
+        std::cout << "  Original: " << collection.originalImageWidth << " x " << collection.originalImageHeight << std::endl;
+        
+        if (totalBytes < 1024 * 1024) {
+            std::cout << "  Total RAM: " << (totalBytes / 1024.0) << " KB" << std::endl;
+        } else if (totalBytes < 1024 * 1024 * 1024) {
+            std::cout << "  Total RAM: " << (totalBytes / (1024.0 * 1024.0)) << " MB" << std::endl;
+        } else {
+            std::cout << "  Total RAM: " << (totalBytes / (1024.0 * 1024.0 * 1024.0)) << " GB" << std::endl;
+        }
+        
+        std::cout << "\nLoaded " << collection.frames.size() << " images for preview" << std::endl;
+        std::cout << "Export will use all " << collection.allFilePaths.size() << " files at full resolution" << std::endl;
     }
-    
-    std::cout << "\nLoaded " << collection.frames.size() << " images for preview" << std::endl;
-    std::cout << "Export will use all " << collection.allFilePaths.size() << " files at full resolution" << std::endl;
     
     return true;
 }
