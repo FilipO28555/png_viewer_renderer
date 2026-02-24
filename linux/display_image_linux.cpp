@@ -7,6 +7,8 @@
 #include "../common/frame_types.h"
 #include "../common/math_utils.h"
 #include "../common/image_loader.h"
+#include "../common/luma_curve.h"
+#include "luma_curve_window.h"
 
 #include <SDL2/SDL.h>
 #include <iostream>
@@ -99,6 +101,9 @@ void signalHandler(int signum) {
 AppSettings g_settings;
 ViewState g_view;
 ImageCollection g_images;
+
+// Luma curve — shared between main view and curve editor window
+LumaCurve g_curve;
 
 // SDL resources
 SDL_Window* g_window = nullptr;
@@ -566,14 +571,26 @@ void RenderFrame() {
         return;
     }
     
-    // Update texture with current frame data
+    // Update texture with current frame data, applying the luma curve LUT if enabled
     unsigned char* frameData = g_images.frames[g_images.currentFrame].data;
     if (!frameData) {
         SDL_RenderPresent(g_renderer);
         return;
     }
-    
-    SDL_UpdateTexture(g_texture, nullptr, frameData, g_images.imageWidth * 3);
+
+    size_t pixelCount = (size_t)g_images.imageWidth * g_images.imageHeight;
+
+    if (g_curve.enabled) {
+        // Apply LUT to a temporary buffer — original frame data is never modified
+        static std::vector<unsigned char> lutBuffer;
+        lutBuffer.resize(pixelCount * 3);
+        for (size_t i = 0; i < pixelCount * 3; ++i) {
+            lutBuffer[i] = g_curve.lut[frameData[i]];
+        }
+        SDL_UpdateTexture(g_texture, nullptr, lutBuffer.data(), g_images.imageWidth * 3);
+    } else {
+        SDL_UpdateTexture(g_texture, nullptr, frameData, g_images.imageWidth * 3);
+    }
     
     // Calculate render parameters
     RenderParams params = CalculateRenderParams(g_view, g_settings, 
@@ -645,6 +662,7 @@ void ParseArguments(int argc, char* argv[]) {
             std::cout << "  Shift + Mouse Wheel:   Change z-height (3D mode only)" << std::endl;
             std::cout << "  Left Drag:             Pan" << std::endl;
             std::cout << "  R:                     Reset view" << std::endl;
+            std::cout << "  L:                     Open/close luma curve editor" << std::endl;
             std::cout << "  S:                     Export to MP4" << std::endl;
             std::cout << "  Q/Escape:              Quit" << std::endl;
             exit(0);
@@ -738,80 +756,105 @@ int main(int argc, char* argv[]) {
     
     // Main loop
     bool running = true;
+    bool needRedraw = true;  // draw once on startup
     SDL_Event event;
     
     while (running && !g_interrupted.load()) {
-        // Process events
+
+        // --- Drain all pending events (discrete actions only) ---
+        // SDL_MOUSEMOTION is intentionally ignored here; pan is handled below
+        // by sampling the mouse position directly, which avoids motion-event
+        // queue build-up that caused the lag.
         while (SDL_PollEvent(&event)) {
+
+            // Forward to curve window (handles its own mouse/keyboard events)
+            if (CurveWindow_HandleEvent(event, g_curve)) {
+                needRedraw = true;
+            }
+
             switch (event.type) {
                 case SDL_QUIT:
                     running = false;
                     break;
-                
+
+                case SDL_WINDOWEVENT:
+                    if (event.window.windowID == SDL_GetWindowID(g_window) &&
+                        (event.window.event == SDL_WINDOWEVENT_EXPOSED ||
+                         event.window.event == SDL_WINDOWEVENT_RESIZED)) {
+                        needRedraw = true;
+                    }
+                    break;
+
                 case SDL_KEYDOWN:
                     switch (event.key.keysym.sym) {
                         case SDLK_q:
                         case SDLK_ESCAPE:
                             running = false;
                             break;
-                        
+
                         case SDLK_LEFT:
                         case SDLK_a:
                             if (g_images.currentFrame > 0) {
                                 g_images.currentFrame--;
                                 UpdateWindowTitle();
+                                needRedraw = true;
                             }
                             break;
-                        
+
                         case SDLK_RIGHT:
                         case SDLK_d:
                             if (g_images.currentFrame < (int)g_images.size() - 1) {
                                 g_images.currentFrame++;
                                 UpdateWindowTitle();
+                                needRedraw = true;
                             }
                             break;
-                        
+
                         case SDLK_UP:
-                            std::cout << "UP key pressed, mode3D=" << g_settings.mode3D 
-                                      << ", currentZIndex=" << g_images.currentZIndex 
-                                      << ", zHeights.size=" << g_images.zHeights.size() << std::endl;
-                            // In 3D mode, Up arrow increases z-height
+                            if (g_settings.debugMode)
+                                std::cout << "UP key pressed, mode3D=" << g_settings.mode3D
+                                          << ", currentZIndex=" << g_images.currentZIndex
+                                          << ", zHeights.size=" << g_images.zHeights.size() << std::endl;
                             if (g_settings.mode3D) {
                                 if (g_images.currentZIndex < (int)g_images.zHeights.size() - 1) {
                                     g_view.isPlaying = false;
                                     SwitchToZHeight(g_images.currentZIndex + 1);
                                     UpdateWindowTitle();
-                                } else {
+                                    needRedraw = true;
+                                } else if (g_settings.debugMode) {
                                     std::cout << "  Already at highest z-height" << std::endl;
                                 }
                             }
                             break;
-                        
+
                         case SDLK_DOWN:
-                            std::cout << "DOWN key pressed, mode3D=" << g_settings.mode3D 
-                                      << ", currentZIndex=" << g_images.currentZIndex << std::endl;
-                            // In 3D mode, Down arrow decreases z-height
+                            if (g_settings.debugMode)
+                                std::cout << "DOWN key pressed, mode3D=" << g_settings.mode3D
+                                          << ", currentZIndex=" << g_images.currentZIndex << std::endl;
                             if (g_settings.mode3D) {
                                 if (g_images.currentZIndex > 0) {
                                     g_view.isPlaying = false;
                                     SwitchToZHeight(g_images.currentZIndex - 1);
                                     UpdateWindowTitle();
-                                } else {
+                                    needRedraw = true;
+                                } else if (g_settings.debugMode) {
                                     std::cout << "  Already at lowest z-height" << std::endl;
                                 }
                             }
                             break;
-                        
+
                         case SDLK_HOME:
                             g_images.currentFrame = 0;
                             UpdateWindowTitle();
+                            needRedraw = true;
                             break;
-                        
+
                         case SDLK_END:
                             g_images.currentFrame = (int)g_images.size() - 1;
                             UpdateWindowTitle();
+                            needRedraw = true;
                             break;
-                        
+
                         case SDLK_SPACE:
                             g_view.isPlaying = !g_view.isPlaying;
                             if (g_view.isPlaying) {
@@ -821,126 +864,136 @@ int main(int argc, char* argv[]) {
                             }
                             UpdateWindowTitle();
                             break;
-                        
+
                         case SDLK_j:
                             g_view.playDirection = -g_view.playDirection;
                             UpdateWindowTitle();
                             break;
-                        
+
                         case SDLK_r:
                             g_view.reset();
                             UpdateWindowTitle();
+                            needRedraw = true;
                             break;
+
                         case SDLK_s:
                             g_view.isPlaying = false;
                             std::cout << "\n[S] pressed: starting MULTI-THREADED MP4 export..." << std::endl;
                             ExportToMP4_MT();
+                            needRedraw = true;
+                            break;
+
+                        case SDLK_l:
+                            if (CurveWindow_IsOpen()) {
+                                CurveWindow_Close();
+                                g_curve.enabled = false;
+                            } else {
+                                g_curve.enabled = true;
+                                CurveWindow_Open(g_curve);
+                            }
+                            needRedraw = true;
                             break;
                     }
                     break;
-                
+
                 case SDL_MOUSEWHEEL: {
                     SDL_Keymod modState = SDL_GetModState();
                     bool shiftPressed = (modState & KMOD_SHIFT) != 0;
-                    
+
                     if (g_settings.debugMode) {
-                        std::cout << "MouseWheel event: y=" << event.wheel.y 
-                                  << ", shift=" << shiftPressed 
+                        std::cout << "MouseWheel event: y=" << event.wheel.y
+                                  << ", shift=" << shiftPressed
                                   << ", mode3D=" << g_settings.mode3D << std::endl;
                     }
-                    
-                    // In 3D mode with Shift pressed: change z-height
+
                     if (g_settings.mode3D && shiftPressed) {
-                        int deltaZ = event.wheel.y; // positive = up, negative = down
-                        int newZIndex = g_images.currentZIndex + deltaZ;
-                        if (g_settings.debugMode) {
-                            std::cout << "  Attempting z-change: " << g_images.currentZIndex 
-                                      << " -> " << newZIndex << std::endl;
-                        }
+                        int newZIndex = g_images.currentZIndex + event.wheel.y;
                         if (newZIndex >= 0 && newZIndex < (int)g_images.zHeights.size()) {
                             g_view.isPlaying = false;
                             SwitchToZHeight(newZIndex);
                             UpdateWindowTitle();
-                        } else {
-                            if (g_settings.debugMode) {
-                                std::cout << "  Out of range!" << std::endl;
-                            }
+                            needRedraw = true;
                         }
                     } else {
-                        // Normal zoom behavior
                         int mouseX, mouseY;
                         SDL_GetMouseState(&mouseX, &mouseY);
                         double zoomFactor = (event.wheel.y > 0) ? 1.15 : (1.0 / 1.15);
                         ApplyZoom(g_view, g_settings, g_images.imageWidth, g_images.imageHeight,
                                   mouseX, mouseY, zoomFactor);
                         UpdateWindowTitle();
+                        needRedraw = true;
                     }
                     break;
                 }
-                
+
                 case SDL_MOUSEBUTTONDOWN:
-                    if (event.button.button == SDL_BUTTON_LEFT) {
+                    if (event.button.button == SDL_BUTTON_LEFT &&
+                        event.button.windowID == SDL_GetWindowID(g_window)) {
                         g_view.isDragging = true;
-                        g_view.lastMouseX = event.button.x;
-                        g_view.lastMouseY = event.button.y;
+                        // Seed lastMouseX/Y so the first pan delta is zero
+                        SDL_GetMouseState(&g_view.lastMouseX, &g_view.lastMouseY);
                     }
                     break;
-                
+
                 case SDL_MOUSEBUTTONUP:
                     if (event.button.button == SDL_BUTTON_LEFT) {
                         g_view.isDragging = false;
                     }
                     break;
-                
-                case SDL_MOUSEMOTION:
-                    if (g_view.isDragging) {
-                        ApplyPan(g_view, g_settings, g_images.imageWidth, g_images.imageHeight,
-                                 event.motion.x, event.motion.y);
-                    }
-                    break;
+
+                // SDL_MOUSEMOTION intentionally not handled here —
+                // pan is polled below to avoid queue back-pressure.
             }
         }
-        
-        // Update playback
+
+        // --- Poll mouse position directly for smooth, lag-free pan ---
+        if (g_view.isDragging) {
+            int mx, my;
+            SDL_GetMouseState(&mx, &my);
+            if (mx != g_view.lastMouseX || my != g_view.lastMouseY) {
+                ApplyPan(g_view, g_settings, g_images.imageWidth, g_images.imageHeight, mx, my);
+                needRedraw = true;
+            }
+        }
+
+        // --- Curve window hover (also polled, not event-driven) ---
+        CurveWindow_Poll(g_curve);
+
+        // --- Advance playback one frame per tick ---
         if (g_view.isPlaying) {
             int nextFrame = g_images.currentFrame + g_view.playDirection;
-            
-            // Wrap around
-            if (nextFrame >= (int)g_images.size()) {
-                nextFrame = 0;
-            } else if (nextFrame < 0) {
-                nextFrame = (int)g_images.size() - 1;
-            }
-            
+            if (nextFrame >= (int)g_images.size()) nextFrame = 0;
+            else if (nextFrame < 0) nextFrame = (int)g_images.size() - 1;
             g_images.currentFrame = nextFrame;
-            
-            // Calculate FPS
+
             auto currentTime = Clock::now();
             double deltaTime = std::chrono::duration<double>(currentTime - lastFrameTime).count();
             lastFrameTime = currentTime;
-            
             g_view.frameCount++;
             g_view.fpsAccumulator += deltaTime;
-            
             if (g_view.frameCount >= 10) {
                 g_view.currentFPS = g_view.frameCount / g_view.fpsAccumulator;
                 g_view.frameCount = 0;
                 g_view.fpsAccumulator = 0.0;
             }
-            
+
             UpdateWindowTitle();
+            needRedraw = true;
         }
-        
-        // Render
-        RenderFrame();
-        
-        // If not playing, wait for events to save CPU
-        if (!g_view.isPlaying) {
-            SDL_WaitEvent(nullptr);
+
+        // --- Render only when something changed; sleep briefly when idle ---
+        if (needRedraw) {
+            RenderFrame();
+            needRedraw = false;
+        } else {
+            // Nothing to draw — yield the CPU for ~8ms so we don't busy-spin
+            // at 100% when the viewer is just sitting still.
+            SDL_Delay(8);
         }
     }
     
     // Cleanup
+    CurveWindow_Close();
     g_images.cleanup();
     if (g_texture) SDL_DestroyTexture(g_texture);
     SDL_DestroyRenderer(g_renderer);

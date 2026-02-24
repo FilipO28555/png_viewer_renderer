@@ -43,9 +43,13 @@ inline void ApplyZoom(ViewState& view, const AppSettings& settings,
     double mouseImgX = (mouseX - settings.windowWidth / 2.0) / oldScale + imageWidth / 2.0 + view.panX;
     double mouseImgY = (mouseY - settings.windowHeight / 2.0) / oldScale + imageHeight / 2.0 + view.panY;
     
-    // Apply zoom with limits
+    // Apply zoom with limits.
+    // Maximum zoom is defined so that fitScale * zoomLevel = 2.0, i.e. one
+    // image pixel spans exactly 2×2 screen pixels.  This is computed per-frame
+    // so it scales correctly with any image or window size.
+    double maxZoom = 2.0 / fitScale;
     view.zoomLevel *= zoomFactor;
-    view.zoomLevel = std::clamp(view.zoomLevel, settings.minZoom, settings.maxZoom);
+    view.zoomLevel = std::clamp(view.zoomLevel, settings.minZoom, maxZoom);
     
     double newScale = fitScale * view.zoomLevel;
     
