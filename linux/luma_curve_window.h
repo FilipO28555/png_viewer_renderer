@@ -375,7 +375,7 @@ inline void CurveWindow_Open(LumaCurve& curve) {
         "Luma Curve",
         SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
         WIN_W, WIN_H,
-        SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
+        SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE
     );
     if (!win) return;
 
@@ -404,7 +404,12 @@ inline void CurveWindow_Open(LumaCurve& curve) {
                     std::lock_guard<std::mutex> lk(curveMutex);
                     snapshot = curveCopy;
                 }
-                if (ren) CurveWindow_DrawNow(snapshot);
+                if (ren) {
+                    CurveWindow_DrawNow(snapshot);
+                    // Show the window after the first frame is painted —
+                    // eliminates the WM double-flash on open.
+                    SDL_ShowWindow(win);
+                }
             }
             SDL_Delay(8);  // ~120 Hz cap; avoids busy-spin
         }

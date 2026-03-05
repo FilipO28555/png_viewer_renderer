@@ -700,12 +700,14 @@ int main(int argc, char* argv[]) {
         return -1;
     }
     
-    // Create window
+    // Create window — hidden initially so we can render the first frame before
+    // showing it, which avoids the double-flash caused by the WM re-decorating
+    // a window that was shown before its contents were ready.
     g_window = SDL_CreateWindow(
         "PNG Image Viewer",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         g_settings.windowWidth, g_settings.windowHeight,
-        SDL_WINDOW_SHOWN
+        SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE
     );
     
     if (!g_window) {
@@ -985,6 +987,9 @@ int main(int argc, char* argv[]) {
         if (needRedraw) {
             RenderFrame();
             needRedraw = false;
+            // Show the window after the very first frame is rendered —
+            // this eliminates the WM double-flash on startup.
+            SDL_ShowWindow(g_window);
         } else {
             // Nothing to draw — yield the CPU for ~8ms so we don't busy-spin
             // at 100% when the viewer is just sitting still.
