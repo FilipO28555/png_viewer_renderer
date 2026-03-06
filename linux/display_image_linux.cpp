@@ -48,7 +48,8 @@ static void RenderViewToBufferHQ(
     const ViewState& view,
     const AppSettings& settings,
     int displayedImageW,
-    int displayedImageH
+    int displayedImageH,
+    const LumaCurve* curve = nullptr   // optional: apply luma curve to output pixels
 ) {
     // BUG FIX: Scale view parameters from displayed (shrunk) image to full-res image
     // The view.panX/panY are in displayed image coordinates, need to scale to full-res
@@ -77,9 +78,15 @@ static void RenderViewToBufferHQ(
                 unsigned char* dst = buffer + (static_cast<size_t>(y) * outW + x) * 3;
                 if (sx >= 0 && sx < srcW && sy >= 0 && sy < srcH) {
                     const unsigned char* srcPix = src + (static_cast<size_t>(sy) * srcW + sx) * 3;
-                    dst[0] = srcPix[0];
-                    dst[1] = srcPix[1];
-                    dst[2] = srcPix[2];
+                    if (curve && curve->enabled) {
+                        dst[0] = curve->lut[srcPix[0]];
+                        dst[1] = curve->lut[srcPix[1]];
+                        dst[2] = curve->lut[srcPix[2]];
+                    } else {
+                        dst[0] = srcPix[0];
+                        dst[1] = srcPix[1];
+                        dst[2] = srcPix[2];
+                    }
                 } else {
                     dst[0] = dst[1] = dst[2] = 0;
                 }
@@ -1096,7 +1103,8 @@ void ExportToMP4_MT() {
                 RenderViewToBufferHQ(buffer, winW, winH,
                                      data, w, h,
                                      capturedView, capturedSettings,
-                                     displayedW, displayedH);
+                                     displayedW, displayedH,
+                                     &g_curve);
                 stbi_image_free(data);
             }
 
