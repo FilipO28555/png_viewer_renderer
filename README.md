@@ -46,7 +46,7 @@ See `linux/README.md` for more installation options if SDL2 module is not availa
 | `-n, --nth <n>` | Load every n-th image for preview | 1 |
 | `-x <width>` | Window width in pixels | 1000 |
 | `-y <height>` | Window height in pixels | 1000 |
-| `-t, --threads <n>` | Number of threads for loading/export | 12 |
+| `-t, --threads <n>` | Number of threads for loading/export | 72 |
 | `-h, --help` | Show help message | - |
 
 ## Controls
