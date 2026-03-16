@@ -8,8 +8,8 @@ A fast, multi-threaded PNG image sequence viewer for Windows and linux with high
 - **Multi-threaded loading**: Parallel image loading for quick startup
 - **Zoom & pan**: Mouse wheel to zoom, drag to pan
 - **Animation playback**: Play through sequences with real-time FPS display
-- **High-quality MP4 export**: Exports using original full-resolution files (Windows)
-- **Multi-threaded export**: Parallel rendering for fast exports (Windows)
+- **High-quality MP4 export**: Exports using original full-resolution files
+- **Multi-threaded export**: Parallel rendering for fast exports
 - **Memory efficient**: Only keeps preview images in RAM; exports read originals on-the-fly
 
 ## Quick Start
